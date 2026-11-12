@@ -276,8 +276,117 @@ dcgmi dmon -e 100,101,102,203,204 -d 5000
 - 是否出現 Xid 錯誤、ECC 錯誤、GPU 掉卡、驅動崩潰或程序異常退出。
 - 測試完成後再次執行 `nvidia-smi`，確認所有 GPU 仍可正常辨識且無錯誤狀態。
 
-## 安全提醒
+## 壓測
+以下是一份適用於 **Ubuntu + NVIDIA GPU** 的單一腳本，會安裝編譯相依套件、下載 GPU Burn、編譯，並執行壓力測試。腳本預設測試 **1 小時**；請先確認驅動、CUDA toolkit 與散熱／供電條件正常。
 
+```bash
+#!/usr/bin/env bash
+# B300 GPU 壓力測試腳本
+# 適用環境：Ubuntu + NVIDIA GPU + 已安裝 NVIDIA driver 與 CUDA toolkit
+# 用途：下載、編譯並執行 GPU Burn 壓力測試
+
+set -euo pipefail
+
+# ===== 可調整參數 =====
+TEST_SECONDS=3600          # 壓測時間（秒）；3600 = 1 小時
+GPU_MEMORY_PERCENT="90%"   # 使用 GPU 記憶體比例
+GPU_INDEX=""               # 留空表示測試所有 GPU；例如 "0,1" 只測 GPU 0 與 1
+INSTALL_DIR="$HOME/gpu-burn"
+
+echo "=========================================="
+echo " 開始 B300 GPU 壓力測試"
+echo " 測試時間：${TEST_SECONDS} 秒"
+echo "=========================================="
+
+# ===== 1. 檢查 NVIDIA 驅動與 GPU =====
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "錯誤：找不到 nvidia-smi。請先安裝 NVIDIA driver。"
+    exit 1
+fi
+
+echo "目前 GPU 狀態："
+nvidia-smi
+
+# ===== 2. 安裝必要套件 =====
+echo "安裝編譯所需套件..."
+sudo apt update
+sudo apt install -y \
+    build-essential \
+    git \
+    curl \
+    wget \
+    pciutils
+
+# ===== 3. 下載 GPU Burn =====
+if [ -d "$INSTALL_DIR" ]; then
+    echo "已存在 $INSTALL_DIR，更新原始碼..."
+    cd "$INSTALL_DIR"
+    git pull
+else
+    echo "下載 GPU Burn..."
+    git clone https://github.com/wilicc/gpu-burn.git "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+fi
+
+# ===== 4. 編譯 GPU Burn =====
+echo "編譯 GPU Burn..."
+make clean || true
+make
+
+# ===== 5. 執行壓力測試 =====
+echo "開始壓力測試..."
+
+if [ -n "$GPU_INDEX" ]; then
+    echo "僅測試 GPU index：$GPU_INDEX"
+    ./gpu_burn -i "$GPU_INDEX" -m "$GPU_MEMORY_PERCENT" "$TEST_SECONDS"
+else
+    echo "測試所有可見 GPU..."
+    ./gpu_burn -m "$GPU_MEMORY_PERCENT" "$TEST_SECONDS"
+fi
+
+# ===== 6. 測試後檢查 =====
+echo "壓力測試完成，檢查 GPU 狀態..."
+nvidia-smi
+
+echo "=========================================="
+echo " 壓力測試結束"
+echo " 請檢查：溫度、功耗、ECC、Xid 錯誤與降頻"
+echo "=========================================="
+```
+
+## 使用方式
+
+將上述內容儲存為 `b300_gpu_burn.sh`，然後執行：
+
+```bash
+chmod +x b300_gpu_burn.sh
+./b300_gpu_burn.sh
+```
+
+## 參數說明
+
+- `TEST_SECONDS=3600`：壓測 1 小時；若要 3 小時，改成 `10800`。
+- `GPU_MEMORY_PERCENT="90%"`：GPU Burn 預設使用約 90% 可用 GPU 記憶體；若要較保守測試，可改成 `"50%"`。
+- `GPU_INDEX=""`：預設測試所有 GPU；例如只想測 GPU 0 與 GPU 1，改成 `GPU_INDEX="0,1"`。
+- 腳本會先檢查 `nvidia-smi`，確認 NVIDIA 驅動可用後才繼續執行。
+- GPU Burn 是多 GPU CUDA 壓力測試工具，可對 NVIDIA GPU 進行高負載運算測試。 [github](https://github.com/wilicc/gpu-burn)
+
+## 建議的驗收觀察
+
+測試期間另開一個終端機，持續觀察：
+
+```bash
+nvidia-smi dmon -s pucvmet -d 5
+```
+
+重點檢查：
+
+- GPU 溫度是否穩定，沒有持續上升或異常降頻。
+- 功耗、風扇轉速與液冷進出口溫差是否在原廠規範內。
+- 是否出現 Xid 錯誤、ECC 錯誤、GPU 掉卡、驅動崩潰或程序異常退出。
+- 測試完成後再次執行 `nvidia-smi`，確認所有 GPU 仍可正常辨識且無錯誤狀態。
+
+## 安全提醒
 GPU Burn 與 DCGM Level 3 診斷會使 GPU 進入高負載、高溫與高功耗狀態。B300 屬於高功率資料中心 GPU，正式壓測前應確認：
 
 - 機櫃供電與斷路器容量。
